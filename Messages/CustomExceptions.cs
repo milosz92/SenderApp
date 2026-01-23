@@ -11,3 +11,9 @@ public class CircuitBreakerException : Exception
 {
     public CircuitBreakerException(string message) : base(message) { }
 }
+
+// Exception that will just throw without any resilience policy
+public class FatalException : Exception
+{
+    public FatalException(string message) : base(message) { }
+}

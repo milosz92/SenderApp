@@ -38,6 +38,7 @@ public class OrderController : ControllerBase
     /// <param name="exceptionType">
     /// - "retry": Triggers RetryableException in ClientB (Polly will retry 3 times)
     /// - "circuit-breaker": Triggers CircuitBreakerException in ClientB (opens circuit after threshold)
+    /// - "fatal": Triggers FatalException in ClientB (fails immediately, no resilience)
     /// - null or empty: Success scenario
     /// </param>
     [HttpPost("process")]
@@ -66,6 +67,7 @@ public class OrderController : ControllerBase
             {
                 "retry" => "ClientB will trigger RetryableException - Polly will retry 3 times",
                 "circuit-breaker" => "ClientB will trigger CircuitBreakerException - Circuit breaker will open after threshold",
+                "fatal" => "ClientB will trigger FatalException - Fails immediately without retry or circuit breaker",
                 _ => "Both clients will process successfully"
             }
         });

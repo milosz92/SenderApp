@@ -67,6 +67,7 @@ Console.WriteLine("===========================================");
 Console.WriteLine("Test with different ExceptionType values:");
 Console.WriteLine("  - 'retry' -> Triggers RetryableException (Polly will retry 3 times)");
 Console.WriteLine("  - 'circuit-breaker' -> Triggers CircuitBreakerException (opens circuit)");
+Console.WriteLine("  - 'fatal' -> Triggers FatalException (fails immediately, no resilience)");
 Console.WriteLine("  - null or empty -> Success");
 Console.WriteLine("===========================================");
 Console.WriteLine("Press any key to exit...");

@@ -58,6 +58,13 @@ public class OrderPlacedHandler : IHandleMessages<OrderPlaced>
                     throw; // Re-throw to fail the message
                 }
             }
+            else if (message.ExceptionType == "fatal")
+            {
+                // Fatal exception - no resilience policy
+                Console.WriteLine("[ClientB] Processing with FATAL EXCEPTION (no resilience policy)...");
+                var result = await ProcessWithFatalException(message);
+                Console.WriteLine($"[ClientB] ? SUCCESS: {result}");
+            }
             else
             {
                 // Normal processing without exceptions
@@ -76,6 +83,12 @@ public class OrderPlacedHandler : IHandleMessages<OrderPlaced>
             Console.WriteLine($"[ClientB] ? CIRCUIT BREAKER EXCEPTION - Circuit may open");
             Console.WriteLine($"[ClientB] Exception: {ex.Message}");
             throw; // Re-throw to send to error queue
+        }
+        catch (FatalException ex)
+        {
+            Console.WriteLine($"[ClientB] ? FATAL EXCEPTION - Failing immediately");
+            Console.WriteLine($"[ClientB] Exception: {ex.Message}");
+            throw; // Re-throw to send to error queue immediately
         }
 
         Console.WriteLine("===========================================");
@@ -111,5 +124,16 @@ public class OrderPlacedHandler : IHandleMessages<OrderPlaced>
         await Task.Delay(500);
         
         return $"Order {message.OrderId} processed successfully by ClientB!";
+    }
+
+    private async Task<string> ProcessWithFatalException(OrderPlaced message)
+    {
+        Console.WriteLine($"[ProcessWithFatalException] Attempting to process order {message.OrderId}...");
+        
+        // Simulate some work before failing
+        await Task.Delay(100);
+        
+        // Throw fatal exception - no retry, no circuit breaker
+        throw new FatalException($"Fatal error for OrderId: {message.OrderId} - Operation cannot be recovered");
     }
 }
