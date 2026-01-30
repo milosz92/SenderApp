@@ -11,6 +11,7 @@ public class RabbitMQConsumer : IDisposable
     private IModel? _channel;
     private string? _queueName;
     private const string ExchangeName = "events";
+    private const string ErrorQueueName = "error";
 
     public RabbitMQConsumer(RabbitMQConnection rabbitMQConnection)
     {
@@ -20,17 +21,18 @@ public class RabbitMQConsumer : IDisposable
     public void Initialize(string queueName, string[] routingKeys)
     {
         _queueName = queueName;
+        
         var connection = _rabbitMQConnection.GetConnection();
         _channel = connection.CreateModel();
 
-        // Declare the exchange
+        // Declare the main exchange
         _channel.ExchangeDeclare(
             exchange: ExchangeName,
             type: ExchangeType.Topic,
             durable: true,
             autoDelete: false);
 
-        // Declare the queue as quorum queue (matching NServiceBus configuration)
+        // Declare the main queue as quorum queue
         var queueArguments = new Dictionary<string, object>
         {
             { "x-queue-type", "quorum" }
@@ -43,7 +45,7 @@ public class RabbitMQConsumer : IDisposable
             autoDelete: false,
             arguments: queueArguments);
 
-        // Bind queue to exchange with routing keys
+        // Bind main queue to main exchange with routing keys
         foreach (var routingKey in routingKeys)
         {
             _channel.QueueBind(
@@ -82,16 +84,20 @@ public class RabbitMQConsumer : IDisposable
                     }
                     else
                     {
-                        // Reject and don't requeue (send to DLQ if configured)
-                        _channel.BasicNack(deliveryTag: ea.DeliveryTag, multiple: false, requeue: false);
+                        // Handler returned false - move to error queue
+                        MoveToErrorQueue(ea, body, "Handler returned false");
+                        _channel.BasicAck(deliveryTag: ea.DeliveryTag, multiple: false);
                     }
                 }
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error processing message: {ex.Message}");
-                // Reject and don't requeue (send to DLQ if configured)
-                _channel.BasicNack(deliveryTag: ea.DeliveryTag, multiple: false, requeue: false);
+                Console.WriteLine($"Moving message to error queue: {ErrorQueueName}");
+                
+                // Move to error queue immediately - Polly handles retries
+                MoveToErrorQueue(ea, body, ex.Message, ex.GetType().Name);
+                _channel.BasicAck(deliveryTag: ea.DeliveryTag, multiple: false);
             }
         };
 
@@ -99,6 +105,39 @@ public class RabbitMQConsumer : IDisposable
             queue: _queueName,
             autoAck: false,
             consumer: consumer);
+    }
+
+    private void MoveToErrorQueue(BasicDeliverEventArgs ea, byte[] body, string errorMessage, string? exceptionType = null)
+    {
+        var properties = _channel!.CreateBasicProperties();
+        properties.Persistent = true;
+        properties.Headers = new Dictionary<string, object>
+        {
+            ["x-original-queue"] = _queueName!,
+            ["x-error-message"] = errorMessage,
+            ["x-failed-at"] = DateTime.UtcNow.ToString("O"),
+            ["x-original-routing-key"] = ea.RoutingKey
+        };
+
+        if (exceptionType != null)
+        {
+            properties.Headers["x-exception-type"] = exceptionType;
+        }
+
+        if (ea.BasicProperties.ContentType != null)
+            properties.ContentType = ea.BasicProperties.ContentType;
+        if (ea.BasicProperties.ContentEncoding != null)
+            properties.ContentEncoding = ea.BasicProperties.ContentEncoding;
+
+        Console.WriteLine($"Moving message to error queue: {ErrorQueueName}");
+        Console.WriteLine($"Error: {errorMessage}");
+
+        // Publish directly to error queue using default exchange
+        _channel.BasicPublish(
+            exchange: "",
+            routingKey: ErrorQueueName,
+            basicProperties: properties,
+            body: body);
     }
 
     public void Dispose()

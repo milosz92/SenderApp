@@ -41,6 +41,9 @@ app.UseAuthorization();
 
 app.MapControllers();
 
+// Add health check endpoint
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
+
 Console.WriteLine("===========================================");
 Console.WriteLine("SenderApp is running");
 Console.WriteLine("Swagger: https://localhost:5001/swagger");
