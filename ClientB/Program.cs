@@ -1,25 +1,16 @@
 using Messages;
-using NServiceBus;
+using Messages.RabbitMQ;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using ClientB.Services;
+using ClientB.Handlers;
 
 Console.Title = "ClientB";
 
-// Build configuration to read appsettings.json
 var configuration = new ConfigurationBuilder()
     .SetBasePath(Directory.GetCurrentDirectory())
     .AddJsonFile("appsettings.json", optional: false)
     .Build();
 
-var endpointConfiguration = new EndpointConfiguration("ClientB");
-
-// Configure serialization
-endpointConfiguration.UseSerialization<SystemJsonSerializer>();
-
-var transport = endpointConfiguration.UseTransport<RabbitMQTransport>();
-
-// Get RabbitMQ connection string from appsettings.json
 var rabbitMqConnectionString = configuration.GetConnectionString("RabbitMQ");
 
 if (string.IsNullOrEmpty(rabbitMqConnectionString))
@@ -31,26 +22,11 @@ if (string.IsNullOrEmpty(rabbitMqConnectionString))
     return;
 }
 
-transport.ConnectionString(rabbitMqConnectionString);
-transport.UseConventionalRoutingTopology(QueueType.Quorum);
+var pollyPolicies = new PollyPolicies(configuration);
+using var rabbitMQConnection = new RabbitMQConnection(rabbitMqConnectionString);
+using var consumer = new RabbitMQConsumer(rabbitMQConnection);
 
-// No routing needed - subscribing to events, not handling commands
-
-// Disable immediate and delayed retries - we'll use Polly instead
-var recoverability = endpointConfiguration.Recoverability();
-recoverability.Immediate(immediate => immediate.NumberOfRetries(0));
-recoverability.Delayed(delayed => delayed.NumberOfRetries(0));
-
-endpointConfiguration.SendFailedMessagesTo("error");
-endpointConfiguration.EnableInstallers();
-
-// Register Polly policies in the container
-endpointConfiguration.RegisterComponents(services =>
-{
-    services.AddSingleton(sp => new PollyPolicies(configuration));
-});
-
-var endpointInstance = await NServiceBus.Endpoint.Start(endpointConfiguration);
+consumer.Initialize("ClientB", new[] { "order.placed" });
 
 var connectionType = rabbitMqConnectionString.Contains("cloudamqp", StringComparison.OrdinalIgnoreCase) 
     ? "CloudAMQP" 
@@ -59,7 +35,8 @@ var connectionType = rabbitMqConnectionString.Contains("cloudamqp", StringCompar
 Console.WriteLine("===========================================");
 Console.WriteLine("ClientB is running and listening for events...");
 Console.WriteLine($"Connected to: {connectionType}");
-Console.WriteLine("Subscribed to: OrderPlaced events");
+Console.WriteLine("Queue: ClientB");
+Console.WriteLine("Subscribed to: order.placed events");
 Console.WriteLine("Polly Policies:");
 Console.WriteLine($"  - Retry: {configuration["Polly:RetryPolicy:MaxRetryAttempts"]} attempts with {configuration["Polly:RetryPolicy:DelayBetweenRetriesSeconds"]}s delay");
 Console.WriteLine($"  - Circuit Breaker: {configuration["Polly:CircuitBreaker:FailureThreshold"]} failures, {configuration["Polly:CircuitBreaker:DurationOfBreakSeconds"]}s break");
@@ -71,6 +48,12 @@ Console.WriteLine("  - 'fatal' -> Triggers FatalException (fails immediately, no
 Console.WriteLine("  - null or empty -> Success");
 Console.WriteLine("===========================================");
 Console.WriteLine("Press any key to exit...");
-Console.ReadKey();
 
-await endpointInstance.Stop();
+var handler = new OrderPlacedHandler(pollyPolicies);
+
+consumer.StartConsuming<OrderPlaced>(async message =>
+{
+    return await handler.HandleAsync(message);
+});
+
+Console.ReadKey();

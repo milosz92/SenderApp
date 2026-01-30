@@ -1,22 +1,21 @@
 using Messages;
-using NServiceBus;
-using Polly.CircuitBreaker;
 using ClientB.Services;
+using Polly.CircuitBreaker;
 
 namespace ClientB.Handlers;
 
-public class OrderPlacedHandler : IHandleMessages<OrderPlaced>
+public class OrderPlacedHandler
 {
     private readonly PollyPolicies _pollyPolicies;
-    private static int _retryAttemptCounter = 0;
-    private static int _circuitBreakerAttemptCounter = 0;
+    private int _retryAttemptCounter = 0;
+    private int _circuitBreakerAttemptCounter = 0;
 
     public OrderPlacedHandler(PollyPolicies pollyPolicies)
     {
-        _pollyPolicies = pollyPolicies;
+        _pollyPolicies = pollyPolicies ?? throw new ArgumentNullException(nameof(pollyPolicies));
     }
 
-    public async Task Handle(OrderPlaced message, IMessageHandlerContext context)
+    public async Task<bool> HandleAsync(OrderPlaced message)
     {
         Console.WriteLine("===========================================");
         Console.WriteLine($"[ClientB] Received OrderPlaced Event");
@@ -30,24 +29,32 @@ public class OrderPlacedHandler : IHandleMessages<OrderPlaced>
         {
             if (message.ExceptionType == "retry")
             {
-                // Use Retry Policy
                 Console.WriteLine("[ClientB] Applying RETRY POLICY with Polly...");
-                var result = await _pollyPolicies.RetryPipeline.ExecuteAsync(
-                    async token => await ProcessWithRetryableException(message),
-                    context.CancellationToken);
+                var result = await _pollyPolicies.RetryPipeline.ExecuteAsync<string>(
+                    async (context) =>
+                    {
+                        _retryAttemptCounter++;
+                        Console.WriteLine($"[ProcessWithRetryableException] Execution attempt #{_retryAttemptCounter}");
+                        await Task.Delay(100);
+                        throw new RetryableException($"Simulated transient error for OrderId: {message.OrderId}");
+                    });
                 
                 Console.WriteLine($"[ClientB] ? SUCCESS: {result}");
             }
             else if (message.ExceptionType == "circuit-breaker")
             {
-                // Use Circuit Breaker Policy
                 Console.WriteLine("[ClientB] Applying CIRCUIT BREAKER POLICY with Polly...");
                 
                 try
                 {
-                    var result = await _pollyPolicies.CircuitBreakerPipeline.ExecuteAsync(
-                        async token => await ProcessWithCircuitBreakerException(message),
-                        context.CancellationToken);
+                    var result = await _pollyPolicies.CircuitBreakerPipeline.ExecuteAsync<string>(
+                        async (context) =>
+                        {
+                            _circuitBreakerAttemptCounter++;
+                            Console.WriteLine($"[ProcessWithCircuitBreakerException] Execution attempt #{_circuitBreakerAttemptCounter}");
+                            await Task.Delay(100);
+                            throw new CircuitBreakerException($"Simulated critical error for OrderId: {message.OrderId}");
+                        });
                     
                     Console.WriteLine($"[ClientB] ? SUCCESS: {result}");
                 }
@@ -55,85 +62,47 @@ public class OrderPlacedHandler : IHandleMessages<OrderPlaced>
                 {
                     Console.WriteLine($"[ClientB] ? CIRCUIT BREAKER IS OPEN - Request rejected immediately");
                     Console.WriteLine($"[ClientB] Exception: {ex.Message}");
-                    throw; // Re-throw to fail the message
+                    return false;
                 }
             }
             else if (message.ExceptionType == "fatal")
             {
-                // Fatal exception - no resilience policy
                 Console.WriteLine("[ClientB] Processing with FATAL EXCEPTION (no resilience policy)...");
-                var result = await ProcessWithFatalException(message);
-                Console.WriteLine($"[ClientB] ? SUCCESS: {result}");
+                Console.WriteLine($"[ProcessWithFatalException] Attempting to process order {message.OrderId}...");
+                await Task.Delay(100);
+                throw new FatalException($"Fatal error for OrderId: {message.OrderId} - Operation cannot be recovered");
             }
             else
             {
-                // Normal processing without exceptions
-                var result = await ProcessSuccessfully(message);
+                Console.WriteLine($"[ProcessSuccessfully] Processing order {message.OrderId}...");
+                await Task.Delay(500);
+                var result = $"Order {message.OrderId} processed successfully by ClientB!";
                 Console.WriteLine($"[ClientB] ? SUCCESS: {result}");
             }
+
+            Console.WriteLine("===========================================");
+            return true;
         }
         catch (RetryableException ex)
         {
             Console.WriteLine($"[ClientB] ? FAILED after all retry attempts");
             Console.WriteLine($"[ClientB] Final Exception: {ex.Message}");
-            throw; // Re-throw to send to error queue
+            Console.WriteLine("===========================================");
+            return false;
         }
         catch (CircuitBreakerException ex)
         {
             Console.WriteLine($"[ClientB] ? CIRCUIT BREAKER EXCEPTION - Circuit may open");
             Console.WriteLine($"[ClientB] Exception: {ex.Message}");
-            throw; // Re-throw to send to error queue
+            Console.WriteLine("===========================================");
+            return false;
         }
         catch (FatalException ex)
         {
             Console.WriteLine($"[ClientB] ? FATAL EXCEPTION - Failing immediately");
             Console.WriteLine($"[ClientB] Exception: {ex.Message}");
-            throw; // Re-throw to send to error queue immediately
+            Console.WriteLine("===========================================");
+            return false;
         }
-
-        Console.WriteLine("===========================================");
-    }
-
-    private async Task<string> ProcessWithRetryableException(OrderPlaced message)
-    {
-        _retryAttemptCounter++;
-        Console.WriteLine($"[ProcessWithRetryableException] Execution attempt #{_retryAttemptCounter}");
-        
-        // Simulate transient failure - always fail for demo purposes
-        await Task.Delay(100); // Simulate some work
-        
-        throw new RetryableException($"Simulated transient error for OrderId: {message.OrderId}");
-    }
-
-    private async Task<string> ProcessWithCircuitBreakerException(OrderPlaced message)
-    {
-        _circuitBreakerAttemptCounter++;
-        Console.WriteLine($"[ProcessWithCircuitBreakerException] Execution attempt #{_circuitBreakerAttemptCounter}");
-        
-        // Simulate critical failure - always fail for demo purposes
-        await Task.Delay(100); // Simulate some work
-        
-        throw new CircuitBreakerException($"Simulated critical error for OrderId: {message.OrderId}");
-    }
-
-    private async Task<string> ProcessSuccessfully(OrderPlaced message)
-    {
-        Console.WriteLine($"[ProcessSuccessfully] Processing order {message.OrderId}...");
-        
-        // Simulate successful processing
-        await Task.Delay(500);
-        
-        return $"Order {message.OrderId} processed successfully by ClientB!";
-    }
-
-    private async Task<string> ProcessWithFatalException(OrderPlaced message)
-    {
-        Console.WriteLine($"[ProcessWithFatalException] Attempting to process order {message.OrderId}...");
-        
-        // Simulate some work before failing
-        await Task.Delay(100);
-        
-        // Throw fatal exception - no retry, no circuit breaker
-        throw new FatalException($"Fatal error for OrderId: {message.OrderId} - Operation cannot be recovered");
     }
 }

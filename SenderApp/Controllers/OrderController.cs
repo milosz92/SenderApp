@@ -1,6 +1,6 @@
 using Messages;
+using Messages.RabbitMQ;
 using Microsoft.AspNetCore.Mvc;
-using NServiceBus;
 
 namespace SenderApp.Controllers;
 
@@ -8,15 +8,15 @@ namespace SenderApp.Controllers;
 [Route("[controller]")]
 public class OrderController : ControllerBase
 {
-    private readonly IMessageSession _messageSession;
+    private readonly RabbitMQPublisher _publisher;
 
-    public OrderController(IMessageSession messageSession)
+    public OrderController(RabbitMQPublisher publisher)
     {
-        _messageSession = messageSession;
+        _publisher = publisher;
     }
 
     [HttpGet]
-    public async Task<IActionResult> PlaceOrder()
+    public IActionResult PlaceOrder()
     {
         var orderId = Guid.NewGuid();
         
@@ -27,7 +27,7 @@ public class OrderController : ControllerBase
             PlacedAt = DateTime.UtcNow
         };
 
-        await _messageSession.Publish(orderPlaced);
+        _publisher.Publish(orderPlaced, "order.placed");
 
         return Accepted(new { OrderId = orderId, Status = "Accepted" });
     }
@@ -42,7 +42,7 @@ public class OrderController : ControllerBase
     /// - null or empty: Success scenario
     /// </param>
     [HttpPost("process")]
-    public async Task<IActionResult> ProcessOrder([FromQuery] string? exceptionType = null)
+    public IActionResult ProcessOrder([FromQuery] string? exceptionType = null)
     {
         var orderId = Guid.NewGuid();
         
@@ -54,7 +54,7 @@ public class OrderController : ControllerBase
             ExceptionType = exceptionType
         };
 
-        await _messageSession.Publish(orderPlaced);
+        _publisher.Publish(orderPlaced, "order.placed");
 
         return Accepted(new 
         { 

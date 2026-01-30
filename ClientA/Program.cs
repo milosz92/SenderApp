@@ -1,23 +1,15 @@
 using Messages;
-using NServiceBus;
+using Messages.RabbitMQ;
 using Microsoft.Extensions.Configuration;
+using ClientA.Handlers;
 
 Console.Title = "ClientA";
 
-// Build configuration to read appsettings.json
 var configuration = new ConfigurationBuilder()
     .SetBasePath(Directory.GetCurrentDirectory())
     .AddJsonFile("appsettings.json", optional: false)
     .Build();
 
-var endpointConfiguration = new EndpointConfiguration("ClientA");
-
-// Configure serialization
-endpointConfiguration.UseSerialization<SystemJsonSerializer>();
-
-var transport = endpointConfiguration.UseTransport<RabbitMQTransport>();
-
-// Get RabbitMQ connection string from appsettings.json
 var rabbitMqConnectionString = configuration.GetConnectionString("RabbitMQ");
 
 if (string.IsNullOrEmpty(rabbitMqConnectionString))
@@ -29,33 +21,10 @@ if (string.IsNullOrEmpty(rabbitMqConnectionString))
     return;
 }
 
-transport.ConnectionString(rabbitMqConnectionString);
-transport.UseConventionalRoutingTopology(QueueType.Quorum);
+using var rabbitMQConnection = new RabbitMQConnection(rabbitMqConnectionString);
+using var consumer = new RabbitMQConsumer(rabbitMQConnection);
 
-//// Configure error queue
-//endpointConfiguration.SendFailedMessagesTo("error");
-
-//// Configure recoverability (retry policy)
-//var recoverability = endpointConfiguration.Recoverability();
-
-//// Immediate retries: 3 attempts with no delay
-//recoverability.Immediate(
-//    immediate =>
-//    {
-//        immediate.NumberOfRetries(3);
-//    });
-
-//// Delayed retries: 2 attempts with increasing delays
-//recoverability.Delayed(
-//    delayed =>
-//    {
-//        delayed.NumberOfRetries(2);
-//        delayed.TimeIncrease(TimeSpan.FromSeconds(10));
-//    });
-
-//endpointConfiguration.EnableInstallers();
-
-var endpointInstance = await Endpoint.Start(endpointConfiguration);
+consumer.Initialize("ClientA", new[] { "order.placed" });
 
 var connectionType = rabbitMqConnectionString.Contains("cloudamqp", StringComparison.OrdinalIgnoreCase) 
     ? "CloudAMQP" 
@@ -64,10 +33,13 @@ var connectionType = rabbitMqConnectionString.Contains("cloudamqp", StringCompar
 Console.WriteLine("===========================================");
 Console.WriteLine("ClientA is running and listening for messages...");
 Console.WriteLine($"Connected to: {connectionType}");
-Console.WriteLine("Retry Policy: 3 immediate retries + 2 delayed retries");
-Console.WriteLine("Error Queue: 'error'");
+Console.WriteLine("Queue: ClientA");
+Console.WriteLine("Subscribed to: order.placed events");
 Console.WriteLine("Press any key to exit...");
 Console.WriteLine("===========================================");
-Console.ReadKey();
 
-await endpointInstance.Stop();
+var handler = new OrderPlacedHandler();
+
+consumer.StartConsuming<OrderPlaced>(async message => await handler.HandleAsync(message));
+
+Console.ReadKey();
