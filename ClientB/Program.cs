@@ -1,6 +1,7 @@
 using Messages;
 using Messages.RabbitMQ;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using ClientB.Services;
 using ClientB.Handlers;
 
@@ -22,8 +23,17 @@ if (string.IsNullOrEmpty(rabbitMqConnectionString))
     return;
 }
 
-var pollyPolicies = new PollyPolicies(configuration);
-using var rabbitMQConnection = new RabbitMQConnection(rabbitMqConnectionString);
+// Setup Dependency Injection
+var services = new ServiceCollection();
+services.AddSingleton<IConfiguration>(configuration);
+services.AddSingleton<PollyPolicies>();
+services.AddSingleton<InboxService>(sp => new InboxService("clientb-inbox.txt"));
+services.AddSingleton<RabbitMQConnection>(sp => new RabbitMQConnection(rabbitMqConnectionString));
+services.AddSingleton<OrderPlacedHandler>();
+
+var serviceProvider = services.BuildServiceProvider();
+
+var rabbitMQConnection = serviceProvider.GetRequiredService<RabbitMQConnection>();
 using var consumer = new RabbitMQConsumer(rabbitMQConnection);
 
 consumer.Initialize("ClientB", new[] { "order.placed" });
@@ -37,6 +47,7 @@ Console.WriteLine("ClientB is running and listening for events...");
 Console.WriteLine($"Connected to: {connectionType}");
 Console.WriteLine("Queue: ClientB");
 Console.WriteLine("Subscribed to: order.placed events");
+Console.WriteLine("Inbox Pattern: Enabled (clientb-inbox.txt)");
 Console.WriteLine("Polly Policies:");
 Console.WriteLine($"  - Retry: {configuration["Polly:RetryPolicy:MaxRetryAttempts"]} attempts with {configuration["Polly:RetryPolicy:DelayBetweenRetriesSeconds"]}s delay");
 Console.WriteLine($"  - Circuit Breaker: {configuration["Polly:CircuitBreaker:FailureThreshold"]} failures, {configuration["Polly:CircuitBreaker:DurationOfBreakSeconds"]}s break");
@@ -49,7 +60,7 @@ Console.WriteLine("  - null or empty -> Success");
 Console.WriteLine("===========================================");
 Console.WriteLine("Press any key to exit...");
 
-var handler = new OrderPlacedHandler(pollyPolicies);
+var handler = serviceProvider.GetRequiredService<OrderPlacedHandler>();
 
 consumer.StartConsuming<OrderPlaced>(async message =>
 {

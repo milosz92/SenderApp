@@ -7,12 +7,14 @@ namespace ClientB.Handlers;
 public class OrderPlacedHandler
 {
     private readonly PollyPolicies _pollyPolicies;
+    private readonly InboxService _inboxService;
     private int _retryAttemptCounter = 0;
     private int _circuitBreakerAttemptCounter = 0;
 
-    public OrderPlacedHandler(PollyPolicies pollyPolicies)
+    public OrderPlacedHandler(PollyPolicies pollyPolicies, InboxService inboxService)
     {
         _pollyPolicies = pollyPolicies ?? throw new ArgumentNullException(nameof(pollyPolicies));
+        _inboxService = inboxService ?? throw new ArgumentNullException(nameof(inboxService));
     }
 
     public async Task<bool> HandleAsync(OrderPlaced message)
@@ -23,6 +25,16 @@ public class OrderPlacedHandler
         Console.WriteLine($"[ClientB] OrderDetails: {message.OrderDetails}");
         Console.WriteLine($"[ClientB] PlacedAt: {message.PlacedAt}");
         Console.WriteLine($"[ClientB] ExceptionType: {message.ExceptionType ?? "none (success)"}");
+
+        // INBOX PATTERN: Check for duplicates using OrderId
+        if (await _inboxService.IsOrderProcessedAsync(message.OrderId))
+        {
+            Console.WriteLine($"[ClientB] ? DUPLICATE DETECTED - Order {message.OrderId} already processed");
+            Console.WriteLine($"[ClientB] ? Returning success without reprocessing (idempotency)");
+            Console.WriteLine("===========================================");
+            return true;
+        }
+
         Console.WriteLine("===========================================");
 
         try
@@ -79,6 +91,9 @@ public class OrderPlacedHandler
                 var result = $"Order {message.OrderId} processed successfully by ClientB!";
                 Console.WriteLine($"[ClientB] ? SUCCESS: {result}");
             }
+
+            // INBOX PATTERN: Mark order as processed after successful handling
+            await _inboxService.MarkAsProcessedAsync(message.OrderId);
 
             Console.WriteLine("===========================================");
             return true;

@@ -12,7 +12,7 @@ public class OrderController : ControllerBase
 
     public OrderController(RabbitMQPublisher publisher)
     {
-        _publisher = publisher;
+        _publisher = publisher ?? throw new ArgumentNullException(nameof(publisher));
     }
 
     [HttpGet]
@@ -33,8 +33,9 @@ public class OrderController : ControllerBase
     }
 
     /// <summary>
-    /// Publish OrderPlaced event with different scenarios for testing Polly in ClientB
+    /// Publish OrderPlaced event with different scenarios for testing Polly and Inbox Pattern in ClientB
     /// </summary>
+    /// <param name="orderId">Optional OrderId for testing (will generate new if not provided)</param>
     /// <param name="exceptionType">
     /// - "retry": Triggers RetryableException in ClientB (Polly will retry 3 times)
     /// - "circuit-breaker": Triggers CircuitBreakerException in ClientB (opens circuit after threshold)
@@ -42,13 +43,13 @@ public class OrderController : ControllerBase
     /// - null or empty: Success scenario
     /// </param>
     [HttpPost("process")]
-    public IActionResult ProcessOrder([FromQuery] string? exceptionType = null)
+    public IActionResult ProcessOrder([FromQuery] Guid? orderId = null, [FromQuery] string? exceptionType = null)
     {
-        var orderId = Guid.NewGuid();
+        var actualOrderId = orderId ?? Guid.NewGuid();
         
         var orderPlaced = new OrderPlaced
         {
-            OrderId = orderId,
+            OrderId = actualOrderId,
             OrderDetails = $"Order with exception type: {exceptionType ?? "none"}",
             PlacedAt = DateTime.UtcNow,
             ExceptionType = exceptionType
@@ -58,7 +59,8 @@ public class OrderController : ControllerBase
 
         return Accepted(new 
         { 
-            OrderId = orderId, 
+            OrderId = actualOrderId,
+            OrderIdSource = orderId.HasValue ? "Provided (for testing)" : "Generated",
             Status = "Event Published",
             EventType = "OrderPlaced",
             ExceptionType = exceptionType ?? "none (success)",
